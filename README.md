@@ -27,5 +27,3 @@ for s in deliver greenlight volley; do
   ln -sfn "$PWD/codex/$s" ~/.codex/skills/$s
 done
 ```
-
-Edit here, commit, and both tools pick up changes immediately.
