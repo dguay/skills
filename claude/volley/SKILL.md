@@ -62,7 +62,7 @@ Parse `thread_id` → `THREAD_ID`. No `thread.started` line and no verdict file 
   "Fixes are in. The fix delta is in /tmp/volley-fixdiff-$SLUG.patch. Verify each of your prior findings is addressed by this delta — do NOT re-review the full change, do NOT re-run /code-review. Flag a NEW finding only if the fix itself introduced it. End with VERDICT: APPROVED or VERDICT: REVISE." \
   2>/dev/null >/dev/null
 ```
-Exception: if a REVISE round rewrote most of the change (fix delta ≥ half the original diff lines), run the next round as a fresh full review — the delta framing no longer fits.
+**Rewrite exception:** if a REVISE round rewrote most of the change (fix delta ≥ half the original diff lines), the delta framing no longer fits — run the next round full-scope BUT **single-pass** (fresh session, whole diff from `$MERGE_BASE`, no `/code-review` re-run), `timeout 600`. Full scope is about WHAT gets reviewed, not the review machinery — measured 2026-08-01: skill-driven full re-round 17–20 min vs single-pass 5–6 min, same diff sizes.
 
 ## Reviewer: Claude
 
@@ -86,7 +86,7 @@ Model: if the user wrote `claude:<model>` (sonnet|opus|haiku|fable), add `--mode
 ```bash
 /opt/homebrew/bin/timeout 300 "$HOME/.local/bin/claude" -p --model opus --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format text --continue "Fixes are in. The fix delta is in /tmp/volley-fixdiff-$SLUG.patch. Verify each of your prior findings is addressed by this delta — do NOT re-review the full change, do NOT run /code-review, do NOT spawn sub-agents. Flag a NEW finding only if the fix itself introduced it. End with VERDICT: APPROVED or VERDICT: REVISE."
 ```
-Exception: fix delta ≥ half the original diff lines → next round is a fresh full review (delta framing no longer fits).
+**Rewrite exception:** fix delta ≥ half the original diff lines → delta framing no longer fits; next round is full-scope BUT **single-pass** (fresh conversation, whole diff pre-dumped to `/tmp/volley-diff-$SLUG.patch`, the single-pass prompt above, `timeout 600` — never full `/code-review`, regardless of diff size; measured 2026-08-01: sub-agent full re-round 17–20 min vs single-pass 5–6 min).
 
 ## Each round
 
