@@ -43,9 +43,11 @@ Every round the reviewer runs the **`/code-review`** skill, then appends the loo
 
 ## Reviewer: Codex
 
+**Model & effort.** Default profile (Terra) — no `--profile` flag. Round 1 gets `-c model_reasoning_effort=high`: review is judgment, not typing; high effort on the workhorse is cheaper than Sol at near-tie quality (A/B 2026-07). Delta rounds get `-c model_reasoning_effort=medium` — verifying a fix checklist, not discovery. Effort is per-invocation config, safe to lower on resume; the model itself must stay the conversation's model. **High-stakes escalation:** diff touches auth, schema/migrations, payments, or concurrency → run the FINAL verdict round as a fresh `--profile sol` session (new session, never a resume under a different profile).
+
 **Round 1 — fresh session, capture thread_id (hard-bound: `timeout 600`):**
 ```bash
-/opt/homebrew/bin/timeout 600 codex exec -s read-only --json -o /tmp/volley-verdict-$SLUG.txt \
+/opt/homebrew/bin/timeout 600 codex exec -s read-only -c model_reasoning_effort=high --json -o /tmp/volley-verdict-$SLUG.txt \
   "Run the /code-review skill, fixed point $MERGE_BASE. If no spec is found, skip the Spec axis — do not ask. After it reports, append EXACTLY one final line: VERDICT: APPROVED or VERDICT: REVISE — REVISE if any Standards hard violation, any Spec requirement missing/partial/wrong, or any correctness/security finding; APPROVED otherwise." \
   2>/dev/null | grep '"type":"thread.started"'
 ```
@@ -55,7 +57,7 @@ Parse `thread_id` → `THREAD_ID`. No `thread.started` line and no verdict file 
 ```bash
 # resume rejects -s; -c sandbox_mode is REQUIRED or Codex inherits config.toml
 # and could write files.
-/opt/homebrew/bin/timeout 300 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" --json \
+/opt/homebrew/bin/timeout 300 codex exec resume "$THREAD_ID" -c sandbox_mode="read-only" -c model_reasoning_effort=medium --json \
   -o /tmp/volley-verdict-$SLUG.txt \
   "Fixes are in. The fix delta is in /tmp/volley-fixdiff-$SLUG.patch. Verify each of your prior findings is addressed by this delta — do NOT re-review the full change, do NOT re-run /code-review. Flag a NEW finding only if the fix itself introduced it. End with VERDICT: APPROVED or VERDICT: REVISE." \
   2>/dev/null >/dev/null
@@ -66,7 +68,7 @@ Exception: if a REVISE round rewrote most of the change (fix delta ≥ half the 
 
 Run the review in a **fresh headless `claude -p`**, NOT a subagent: full-mode `/code-review` spawns its own two parallel sub-agents, which `caveman:cavecrew-reviewer` (no Agent tool) and nested subagents can't do.
 
-Model: if the user wrote `claude:<model>` (sonnet|opus|haiku|fable), add `--model <model>`; otherwise omit (inherits default).
+Model: if the user wrote `claude:<model>` (sonnet|opus|haiku|fable), add `--model <model>`; otherwise `--model opus` (Opus 5). **High-stakes escalation:** diff touches auth, schema/migrations, payments, or concurrency → run the FINAL verdict round as a fresh `--model fable` conversation (Fable 5; new process, not `--continue` — never resume a conversation under a different model).
 
 **Lean flags — on every reviewer invocation**: `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` (strips MCP bootstrap tokens). CAUTION: `--mcp-config` is variadic — never let the prompt directly follow it; keep another flag between them or the prompt is eaten as a config path. Do NOT add `--setting-sources project,local`: it makes user-level skills (including `/code-review`) discoverable but UNEXECUTABLE — the Skill tool returns a bare `Execute skill: code-review` error (incident 2026-07-12).
 
@@ -76,13 +78,13 @@ Model: if the user wrote `claude:<model>` (sonnet|opus|haiku|fable), add `--mode
 
 **Round 1 — fresh conversation (full mode):**
 ```bash
-/opt/homebrew/bin/timeout 900 "$HOME/.local/bin/claude" -p --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format text "Run the /code-review skill, fixed point $MERGE_BASE. If no spec is found, skip the Spec axis — do not ask. After it reports, append EXACTLY one final line: VERDICT: APPROVED or VERDICT: REVISE — REVISE if any Standards hard violation, any Spec requirement missing/partial/wrong, or any correctness/security finding; APPROVED otherwise."
+/opt/homebrew/bin/timeout 900 "$HOME/.local/bin/claude" -p --model opus --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format text "Run the /code-review skill, fixed point $MERGE_BASE. If no spec is found, skip the Spec axis — do not ask. After it reports, append EXACTLY one final line: VERDICT: APPROVED or VERDICT: REVISE — REVISE if any Standards hard violation, any Spec requirement missing/partial/wrong, or any correctness/security finding; APPROVED otherwise."
 ```
 **Round 1 single-pass prompt (same flags, `timeout 600`):** "Review the diff in /tmp/volley-diff-$SLUG.patch (fixed point $MERGE_BASE) directly — do NOT invoke the code-review skill or spawn sub-agents. Judge two axes: Standards (this repo's conventions, correctness, security) and Spec (the issue/PRD if evident from branch/commits; otherwise skip — do not ask). Use Read/Grep only to chase callers of changed code, not to rediscover the diff. Append EXACTLY one final line: VERDICT: APPROVED or VERDICT: REVISE — REVISE if any hard Standards violation, any Spec requirement missing/partial/wrong, or any correctness/security finding; APPROVED otherwise."
 
 **Rounds 2..MAX — DELTA re-review, never a full re-run** (same flags, either mode; continue the SAME conversation, `timeout 300`, no sub-agents):
 ```bash
-/opt/homebrew/bin/timeout 300 "$HOME/.local/bin/claude" -p --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format text --continue "Fixes are in. The fix delta is in /tmp/volley-fixdiff-$SLUG.patch. Verify each of your prior findings is addressed by this delta — do NOT re-review the full change, do NOT run /code-review, do NOT spawn sub-agents. Flag a NEW finding only if the fix itself introduced it. End with VERDICT: APPROVED or VERDICT: REVISE."
+/opt/homebrew/bin/timeout 300 "$HOME/.local/bin/claude" -p --model opus --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format text --continue "Fixes are in. The fix delta is in /tmp/volley-fixdiff-$SLUG.patch. Verify each of your prior findings is addressed by this delta — do NOT re-review the full change, do NOT run /code-review, do NOT spawn sub-agents. Flag a NEW finding only if the fix itself introduced it. End with VERDICT: APPROVED or VERDICT: REVISE."
 ```
 Exception: fix delta ≥ half the original diff lines → next round is a fresh full review (delta framing no longer fits).
 
