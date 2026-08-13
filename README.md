@@ -9,7 +9,7 @@ claude/   # skills for Claude Code (~/.claude/skills)
 codex/    # skills for Codex CLI  (~/.codex/skills)
 ```
 
-Each skill is a directory containing a `SKILL.md`.
+Each skill is installed from its directory; a skill may include executable helpers alongside `SKILL.md`.
 
 | Skill | What it does |
 |-------|--------------|
