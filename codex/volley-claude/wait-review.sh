@@ -91,12 +91,12 @@ parse_completion() {
     record_blocked "result file is empty: $result"
     return 1
   }
-  session_id=$(jq -ser '[.[] | select(.type == "thread.started") | .thread_id | strings | select(length > 0)] | first' "$result" 2>/dev/null) || {
-    record_blocked "result JSONL has no parseable thread id: $result"
+  session_id=$(jq -er '.session_id | strings | select(length > 0)' "$result" 2>/dev/null) || {
+    record_blocked "result file has no parseable session_id: $result"
     return 1
   }
-  review_text=$(jq -ser '[.[] | select(.type == "item.completed" and .item.type == "agent_message") | .item.text | strings | select(length > 0)] | last' "$result" 2>/dev/null) || {
-    record_blocked "result JSONL has no parseable final agent message: $result"
+  review_text=$(jq -er '.result | strings | select(length > 0)' "$result" 2>/dev/null) || {
+    record_blocked "result file has no parseable review result: $result"
     return 1
   }
   last_line=$(printf '%s\n' "$review_text" | awk 'NF {line=$0} END {print line}')
@@ -233,16 +233,13 @@ self_test() {
   fake_head=0123456789abcdef0123456789abcdef01234567
   trap "rm -rf -- '$test_dir'" EXIT
 
-  # Codex streams JSONL while running; parse it only after the sentinel confirms exit.
-  printf '%s\n' \
-    '{"type":"thread.started","thread_id":"session-1"}' \
-    '{"type":"item.completed","item":{"type":"agent_message","text":"Looks good.\nVERDICT: APPROVED"}}' \
-    > "$test_dir/result.jsonl"
+  # A result file is intentionally 0 bytes until Claude exits; never inspect it mid-wait.
+  printf '%s\n' '{"session_id":"session-1","result":"Looks good.\nVERDICT: APPROVED"}' > "$test_dir/result.json"
   : > "$test_dir/timeline.tsv"
   (sleep 0.2; printf 'REVIEW_EXIT=0\n' > "$test_dir/done") &
   sleeper=$!
   output=$(VOLLEY_SELF_TEST_MODE=1 VOLLEY_WAITER_SECONDS=2 VOLLEY_POLL_SECONDS=0.05 VOLLEY_DEAD_RECHECK_SECONDS=0.05 \
-    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.jsonl" \
+    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.json" \
     --ledger "$test_dir/timeline.tsv" --issue 1 --round 1 --reviewed-head "$fake_head" --pid "$sleeper")
   wait "$sleeper" 2>/dev/null || true
   [[ "$output" == *'VERDICT=APPROVED'* ]] || die 'self-test: missed sentinel written mid-wait'
@@ -251,7 +248,7 @@ self_test() {
   rm -f "$test_dir/done"
   (sleep 2) & sleeper=$!
   output=$(VOLLEY_SELF_TEST_MODE=1 VOLLEY_WAITER_SECONDS=1 VOLLEY_POLL_SECONDS=0.05 VOLLEY_DEAD_RECHECK_SECONDS=0.05 \
-    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.jsonl" \
+    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.json" \
     --ledger "$test_dir/timeline.tsv" --issue 1 --round 2 --reviewed-head "$fake_head" --pid "$sleeper")
   kill "$sleeper" 2>/dev/null || true
   wait "$sleeper" 2>/dev/null || true
@@ -260,7 +257,7 @@ self_test() {
   # Harness completion without a sentinel was observed six minutes before the real review exit.
   set +e
   output=$(VOLLEY_SELF_TEST_MODE=1 VOLLEY_WAITER_SECONDS=1 VOLLEY_POLL_SECONDS=0.05 VOLLEY_DEAD_RECHECK_SECONDS=0.05 \
-    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.jsonl" \
+    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.json" \
     --ledger "$test_dir/timeline.tsv" --issue 1 --round 3 --reviewed-head "$fake_head" --pid 999999 2>&1)
   status=$?
   set -e
@@ -268,10 +265,10 @@ self_test() {
     die 'self-test: dead-without-sentinel was not distinguished from a real exit'
 
   printf 'REVIEW_EXIT=0\n' > "$test_dir/done"
-  : > "$test_dir/result.jsonl"
+  : > "$test_dir/result.json"
   set +e
   output=$(VOLLEY_SELF_TEST_MODE=1 VOLLEY_WAITER_SECONDS=1 VOLLEY_POLL_SECONDS=0.05 VOLLEY_DEAD_RECHECK_SECONDS=0.05 \
-    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.jsonl" \
+    "$script" wait --sentinel "$test_dir/done" --result "$test_dir/result.json" \
     --ledger "$test_dir/timeline.tsv" --issue 1 --round 4 --reviewed-head "$fake_head" --pid 999999 2>&1)
   status=$?
   set -e
