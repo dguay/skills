@@ -39,7 +39,7 @@ review step can't fail late with a not-logged-in error.
 ## Per-issue pipeline (the worker's job)
 
 1. **Fetch**: `gh issue view N --json title,body,labels,comments`. If ambiguous or missing acceptance criteria, derive them from the body and state them explicitly before coding — do not silently guess.
-2. **Branch**: `git checkout -b fix/N-<kebab-slug-from-title>` off the default branch (fresh `git pull` first).
+2. **Branch**: `git checkout -b fix/N-<kebab-slug-from-title>` off the default branch. *Single-issue mode: `git pull` first. Multi-issue mode: do NOT pull — the main agent already did, before spawning (see below); branch off the base it fetched.*
 3. **Implement via /tdd**: red test from the issue's acceptance criteria first, then green, then refactor.
 4. **Verify via /greenlight**: mandatory gate. RED → fix and re-run. Never proceed to review on RED.
 5. **Review via /volley** (default reviewer: codex, since Claude implemented; `--reviewer` overrides — invoke as `/volley <reviewer>`). The reviewer runs the **`/code-review`** skill (Standards + Spec) — it reviews the committed diff, so /volley makes a WIP commit first if the work is uncommitted (amend it at step 6). Runs to APPROVED or deadlock. Deadlock → stop this issue, report unresolved findings, do NOT push.
@@ -57,6 +57,7 @@ review step can't fail late with a not-logged-in error.
 
 ## Multiple issues — parallel workers
 
+- **Pull once, in the main agent, before spawning anything**: `git checkout <default-branch> && git pull`. Worktrees have their own index but share one `.git` — object store, refs, `packed-refs`. Concurrent worker pulls contend on those shared ref locks, and a worker that loses the race dies on a failed git command. Nothing needs each worker to fetch, so the sharing is removed rather than serialized.
 - Spawn one general-purpose agent per issue with `isolation: worktree`, **max 3 concurrent** (known worker-death risk at higher counts — do not raise cap until diagnosed). More than 3 issues → batches of 3.
 - Each worker prompt = the per-issue pipeline above (steps 1–6 only: stop after commit, no push, no PR) + the issue number + the `--reviewer` value if given + instruction to return a structured result: `{issue, branch, tdd: pass/fail, greenlight: GREEN/RED, volley: APPROVED/deadlock/rounds, notes}`.
 - Worker returns nothing or dies → retry ONCE with a fresh worker. Second death → mark FAILED, move on, report it.
@@ -85,10 +86,23 @@ multi-issue runs produce ONE batch PR:
 At run start: `RUNID=$(date +%s); mkdir -p /tmp/deliver-$RUNID`, and pass the path to every worker. Main agent and workers append one line at every phase transition (issue = `N`, or `batch`/`run` for non-issue phases):
 
 ```bash
-echo "$(date +%s)	$ISSUE	$PHASE	$DETAIL" >> /tmp/deliver-$RUNID/timeline.tsv
+# WRITER = the issue number for a worker, "main" for the main agent.
+echo "$(date +%s)	$ISSUE	$PHASE	$DETAIL" >> /tmp/deliver-$RUNID/timeline-$WRITER.tsv
 ```
 
-Phases: `worker_start`, `worker_done`, `review_r<N>_start`, `review_r<N>_verdict` (detail = APPROVED/REVISE/BLOCKED), `greenlight_start`, `greenlight_end` (detail = GREEN/RED/scoped), `merge`, `push`. Cheap — one echo per transition; never skip it. On failure paths (deadlock, worker death, BLOCKED reviewer) include the raw timeline in the final report — failures are exactly when the timeline matters. `~/bin/deliver-stats /tmp/deliver-$RUNID/timeline.tsv` prints the phase-duration table.
+**One shard per writer, never a shared file.** Up to 3 workers plus the main
+agent write the ledger concurrently; a single `timeline.tsv` would make them
+one shared writer for no benefit, since nothing reads the ledger mid-run.
+Each writer owns its own path, so there is nothing to serialize.
+
+Merge on read, at report time only (`sort -n` restores the interleaved
+chronology `deliver-stats` expects):
+
+```bash
+sort -n /tmp/deliver-$RUNID/timeline-*.tsv > /tmp/deliver-$RUNID/timeline.tsv
+```
+
+Phases: `worker_start`, `worker_done`, `review_r<N>_start`, `review_r<N>_verdict` (detail = APPROVED/REVISE/BLOCKED), `greenlight_start`, `greenlight_end` (detail = GREEN/RED/scoped), `merge`, `push`. Cheap — one echo per transition; never skip it. Merge the shards before reading or reporting the timeline. On failure paths (deadlock, worker death, BLOCKED reviewer) include the raw timeline in the final report — failures are exactly when the timeline matters. `~/bin/deliver-stats /tmp/deliver-$RUNID/timeline.tsv` prints the phase-duration table.
 
 ## Final report
 
